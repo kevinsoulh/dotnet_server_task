@@ -1,20 +1,11 @@
-﻿using System.Security.Cryptography;
-using System.Text;
+﻿using System.Text;
 using Core.Arango;
-using Core.Arango.Linq;
 using Microsoft.AspNetCore.Cryptography.KeyDerivation;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Configuration;
-using Microsoft.IdentityModel.Tokens;
-using System;
-using System.Collections.Generic;
-using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
-using System.Text;
-using System.Threading.Tasks;
-using System.Linq;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
 
 namespace server.Controllers;
 [ApiController]
@@ -22,135 +13,105 @@ namespace server.Controllers;
 
 public class AuthController : ControllerBase
 {
-    private readonly ILogger<AuthController> _logger;
-    
-    private readonly IConfiguration _config;
     private readonly ArangoContext _arangoContext;
 
-    public AuthController(ILogger<AuthController> logger, ArangoContext arangoContext, IConfiguration config) {
-        _logger = logger;
+    public record SignInRequest(string Email, string Password);
+
+    private new record Response(bool IsSuccess, string Message);
+    private record UserClaim(string Type, string Value);
+
+    public AuthController(ArangoContext arangoContext) {
         _arangoContext = arangoContext;
-        _config = config;
     }
     
+    //login method
     [AllowAnonymous]
     [HttpPost("login")]
-    public async Task<IActionResult> Login([FromBody] LoginRequest request)
+    public async Task<IActionResult> SignInAsync([FromBody] SignInRequest request)
     {
         if (string.IsNullOrEmpty(request.Email) || string.IsNullOrEmpty(request.Password))
         {
             return BadRequest("Please provide both email and password.");
         }
-    
-        const string query = "FOR user IN Users FILTER user.Email == @Email && user.Password == @Password RETURN user";
-        var bindVars = new Dictionary<string, object?>
+        
+        const string emailCheckerQuery = "FOR user IN Users FILTER user.Email == @Email RETURN { _id: user._id, name: user.Name, email: user.Email, password: user.Password }";
+        var bindEmailCheckerVars = new Dictionary<string, object?>
         {
             { "Email", request.Email },
-            { "Password", Hash(request.Password) }
         };
-    
-        var user = await _arangoContext.Query.ExecuteAsync<User>("_system", query, bindVars);
-        if (user == null || !user.Any())
+        var emailChecker = (await _arangoContext.Query.ExecuteAsync<User>("_system", emailCheckerQuery, bindEmailCheckerVars)).FirstOrDefault();
+
+        const string passwordQuery = "FOR user IN Users FILTER user.Email == @Email && user.Password == @Password RETURN { _id: user._id, name: user.Name, email: user.Email }";
+        var bindPasswordVars = new Dictionary<string, object?>
         {
-            return Unauthorized("Invalid email or password.");
+            { "Email", emailChecker?.Email },
+            { "Password", emailChecker?.Password }
+        };
+        var user = (await _arangoContext.Query.ExecuteAsync<User>("_system", passwordQuery, bindPasswordVars)).FirstOrDefault();
+
+        if (user?.Email != request.Email)
+        {
+            return Unauthorized(new Response(false, "Invalid email address"));
         }
 
-        if (!VerifyPassword(request.Password, user.FirstOrDefault()?.Password))
+        if (!VerifyPassword(request.Password, emailChecker?.Password))
         {
-            return Unauthorized("Invalid email or password.");
+            return Unauthorized(new Response(false, "invalid password"));
         }
 
-        var tokenString = GenerateJwtToken(user.FirstOrDefault());
-    
-        // save token in the database
-        const string updateQuery = "FOR user IN Users FILTER user.Email == @Email UPDATE { _key: user._key, Token: @Token } IN Users";
-        var updateBindVars = new Dictionary<string, object?>
+        var claims = new List<Claim>
         {
-            { "Email", request.Email },
-            { "Token", tokenString }
+            new Claim(type: ClaimTypes.NameIdentifier, value: user?.Id ?? string.Empty),
+            new Claim(type: ClaimTypes.Name, value: user?.Name ?? string.Empty),
+            new Claim(type: ClaimTypes.Email, value: user?.Email ?? string.Empty),
         };
-        await _arangoContext.Query.ExecuteAsync<object>("_system", updateQuery, updateBindVars);
+        var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
 
-        return Ok(new { Token = tokenString });
+        await HttpContext.SignInAsync(
+            CookieAuthenticationDefaults.AuthenticationScheme,
+            new ClaimsPrincipal(identity),
+            new AuthenticationProperties
+            {
+                IsPersistent = true,
+                AllowRefresh = true,
+                ExpiresUtc = DateTimeOffset.UtcNow.AddMinutes(43200),
+            }
+        );
+        
+        return Ok(new Response(true, "Signed in successfully"));
     }
-
     
+    //logout method
     [Authorize]
     [HttpPost("logout")]
-    public async Task<IActionResult> Logout([FromHeader] LogoutRequest request)
+    public async Task SignOutAsync()
     {
-        const string query = "FOR user IN Users FILTER user.Token == @Token UPDATE { _key: user._key, Token: @Token } IN Users";
-        var logoutBindVars = new Dictionary<string, object?>
-        {
-            { "Token", request.Token }
-        };
-        
-        var result = await _arangoContext.Query.ExecuteAsync<User>("_system", query, logoutBindVars);
-            
-        if (result == null) return BadRequest("There was an error while attempting to logout"); 
-
-        return Ok("Successfully logged out");
+        await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
     }
+
+    [Authorize]
+    [HttpGet("get-users")]
+    public async Task<IActionResult> GetUsers()
+    {
+        var userClaims = User.Claims.Select(x => new UserClaim(x.Type, x.Value)).ToList();
+
+        return Ok(userClaims);
+    }
+    
+    /*[Authorize]
+    [HttpGet("self")]
+    public async Task<IActionResult> GetSelf()
+    {
+        var email = User.Claims.First(x => x.Type == ClaimTypes.Email).Value;
+        
+
+        return Ok(userClaims);
+    }*/
     
     private static bool VerifyPassword(string password, string? hashedPassword)
     {
-        // Your password verification logic here
-        return Hash(password) == hashedPassword;
+        return hashedPassword != null && hashedPassword.Equals(Hash(password));
     }
-    
-    private string GenerateJwtToken(User? user)
-    {
-        var tokenHandler = new JwtSecurityTokenHandler();
-        var key = Encoding.ASCII.GetBytes(_config["Jwt:Secret"] ?? string.Empty);
-        var tokenDescriptor = new SecurityTokenDescriptor
-        {
-            Subject = new ClaimsIdentity(new Claim[]
-            {
-                new Claim(ClaimTypes.Name, user?.Name ?? string.Empty)
-            }),
-            Expires = DateTime.UtcNow.AddMinutes(Convert.ToDouble(_config["Jwt:ExpireMinutes"])),
-            SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256Signature)
-        };
-        var token = tokenHandler.CreateToken(tokenDescriptor);
-        return tokenHandler.WriteToken(token);
-    }
-
-    /*[HttpPost("login")]
-    public async Task<dynamic?> Login([FromBody] LoginRequest request)
-    {
-        //var email = bool.Parse((await _arangoContext.Query.ExecuteAsync<string>("_system", $"FOR u IN Users RETURN u.Email == {request.Email}")).First());
-        //var password = bool.Parse((await _arangoContext.Query.ExecuteAsync<string>("_system", $"FOR u IN Users RETURN u.Password = {request.Password}")).First());
-
-        if (request.Email == null || request.Password == null) return null;
-        
-        var requestUser = await _arangoContext.Query.ExecuteAsync<User>("_system", $"FOR user IN Users FILTER user.Email == {request.Email} RETURN user");
-        
-        if (requestUser == null) return BadRequest("There was an error while attempting to login");
-        
-        var user = requestUser.First();
-        
-        var hash = Hash(request.Password);
-
-        if (request.Email != user.Email?.ToString())
-        {
-            return BadRequest($"Email '{request.Email}' not found.");
-        }
-
-        if (hash != user.Password?.ToString())
-        {
-            return BadRequest("Password incorrect."); 
-        }
-        
-        return user;
-    }*/
-
-    /*[HttpGet("logout")]
-    public async Task<dynamic?> Logout([FromHeader] LogoutRequest request)
-    {
-        if (request.Token == null) return null;
-
-        return "Successfully logged out";
-    }*/
 
     [HttpGet("jane_doe")]
     public async Task InsertJaneDoe()
@@ -163,17 +124,6 @@ public class AuthController : ControllerBase
             Password = Hash("test"),
             Token = CreateToken()
         });
-    }
-
-    public class LoginRequest
-    {
-        public string? Email { get; set; }
-        public string? Password { get; set; }
-    }
-
-    public class LogoutRequest
-    {
-        public string? Token { get; set; }
     }
     
     private static string Hash(string? password, string salt = "")

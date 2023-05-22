@@ -1,9 +1,6 @@
-using System.Text.Json.Nodes;
 using Core.Arango;
-using Core.Arango.Linq;
 using Core.Arango.Protocol;
-using Microsoft.AspNetCore.Authentication;
-using Microsoft.IdentityModel.Tokens;
+using Microsoft.AspNetCore.Authentication.Cookies;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -22,16 +19,28 @@ if (!await arango.Collection.ExistAsync("_system", "Claims") &&
 
 builder.Services.AddSingleton(arango);
 
-builder.Services.AddAuthentication("Bearer")
-    .AddJwtBearer("Bearer", options =>
+builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+    .AddCookie(options =>
     {
-        options.Authority = "http://localhost:5287";
-        options.RequireHttpsMetadata = false;
-        options.TokenValidationParameters = new TokenValidationParameters
+        options.Events.OnRedirectToLogin = (context) =>
         {
-            ValidateAudience = false
+            context.Response.StatusCode = 401;
+            return Task.CompletedTask;
         };
     });
+
+const string myAllowSpecificOrigins = "_myAllowSpecificOrigins";
+
+builder.Services.AddCors(options =>
+{
+    options.AddDefaultPolicy(configurePolicy =>
+    {
+        configurePolicy.SetIsOriginAllowed(x => new Uri(x).IsLoopback)
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials();
+    });
+});
 
 builder.Services.AddControllers();
 
@@ -48,10 +57,12 @@ if (app.Environment.IsDevelopment()) {
 }
 
 app.UseAuthentication();
+app.UseAuthorization();
+app.UseCors();
+
+app.MapDefaultControllerRoute();
 
 app.UseHttpsRedirection();
-
-app.UseAuthorization();
 
 app.MapControllers();
 
