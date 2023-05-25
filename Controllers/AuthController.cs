@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Cryptography.KeyDerivation;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
 using System.Security.Claims;
+using Core.Arango.Linq;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 
@@ -15,46 +16,37 @@ public class AuthController : ControllerBase
 {
     private readonly ArangoContext _arangoContext;
 
-    public record SignInRequest(string Email, string Password);
-
     private new record Response(bool IsSuccess, string Message);
     private record UserClaim(string Type, string Value);
+    
+    public class SignInRequest
+    {
+        public string? Email { get; set; }
+        public string? Password { get; set; }
+    }
 
     public AuthController(ArangoContext arangoContext) {
         _arangoContext = arangoContext;
     }
     
-    //login method
+    
     [AllowAnonymous]
     [HttpPost("login")]
     public async Task<IActionResult> SignInAsync([FromBody] SignInRequest request)
     {
         if (string.IsNullOrEmpty(request.Email) || string.IsNullOrEmpty(request.Password))
         {
-            return BadRequest("Please provide both email and password.");
+            return Unauthorized(new Response(false, "Please provide both email and password."));
         }
-        
-        const string emailCheckerQuery = "FOR user IN Users FILTER user.Email == @Email RETURN { _id: user._id, name: user.Name, email: user.Email, password: user.Password }";
-        var bindEmailCheckerVars = new Dictionary<string, object?>
-        {
-            { "Email", request.Email },
-        };
-        var emailChecker = (await _arangoContext.Query.ExecuteAsync<User>("_system", emailCheckerQuery, bindEmailCheckerVars)).FirstOrDefault();
 
-        const string passwordQuery = "FOR user IN Users FILTER user.Email == @Email && user.Password == @Password RETURN { _id: user._id, name: user.Name, email: user.Email }";
-        var bindPasswordVars = new Dictionary<string, object?>
-        {
-            { "Email", emailChecker?.Email },
-            { "Password", emailChecker?.Password }
-        };
-        var user = (await _arangoContext.Query.ExecuteAsync<User>("_system", passwordQuery, bindPasswordVars)).FirstOrDefault();
+        var user = (await _arangoContext.Query<User>("_system").Where(x => x.Email == request.Email).ToListAsync()).FirstOrDefault();
 
         if (user?.Email != request.Email)
         {
             return Unauthorized(new Response(false, "Invalid email address"));
         }
 
-        if (!VerifyPassword(request.Password, emailChecker?.Password))
+        if (!VerifyPassword(request.Password, user?.Password))
         {
             return Unauthorized(new Response(false, "invalid password"));
         }
@@ -62,6 +54,7 @@ public class AuthController : ControllerBase
         var claims = new List<Claim>
         {
             new Claim(type: ClaimTypes.NameIdentifier, value: user?.Id ?? string.Empty),
+            new Claim(type: ClaimTypes.Hash, value: user?.Key ?? string.Empty),
             new Claim(type: ClaimTypes.Name, value: user?.Name ?? string.Empty),
             new Claim(type: ClaimTypes.Email, value: user?.Email ?? string.Empty),
         };
@@ -81,7 +74,7 @@ public class AuthController : ControllerBase
         return Ok(new Response(true, "Signed in successfully"));
     }
     
-    //logout method
+    
     [Authorize]
     [HttpPost("logout")]
     public async Task SignOutAsync()
@@ -90,40 +83,17 @@ public class AuthController : ControllerBase
     }
 
     [Authorize]
-    [HttpGet("get-users")]
-    public async Task<IActionResult> GetUsers()
+    [HttpGet("get-self-auth")]
+    public Task<IActionResult> GetSelfAuth()
     {
         var userClaims = User.Claims.Select(x => new UserClaim(x.Type, x.Value)).ToList();
 
-        return Ok(userClaims);
+        return Task.FromResult<IActionResult>(Ok(userClaims));
     }
-    
-    /*[Authorize]
-    [HttpGet("self")]
-    public async Task<IActionResult> GetSelf()
-    {
-        var email = User.Claims.First(x => x.Type == ClaimTypes.Email).Value;
-        
 
-        return Ok(userClaims);
-    }*/
-    
     private static bool VerifyPassword(string password, string? hashedPassword)
     {
         return hashedPassword != null && hashedPassword.Equals(Hash(password));
-    }
-
-    [HttpGet("jane_doe")]
-    public async Task InsertJaneDoe()
-    {
-        await _arangoContext.Document.CreateAsync("_system", "Users", new
-        {
-            Key = Guid.NewGuid(),
-            Name = "Jane Doe",
-            Email = "janedoe@gmail.com",
-            Password = Hash("test"),
-            Token = CreateToken()
-        });
     }
     
     private static string Hash(string? password, string salt = "")
@@ -141,14 +111,5 @@ public class AuthController : ControllerBase
             numBytesRequested: 256 / 8));
 
         return hash;
-    }
-    
-    private static string CreateToken()
-    {
-        const string allowedChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*_+-=|;:,.<>?";
-        var random = new Random();
-        var token = new string(Enumerable.Repeat(allowedChars, 45).Select(s => s[random.Next(s.Length)]).ToArray());
-
-        return token;
     }
 }
