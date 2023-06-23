@@ -1,9 +1,10 @@
 {
   "version": 2,
-  "dgSpecHash": "zkxGDQRD8Yi6TkziHEKoH31FoINv6rC7I4SLlGnZwYGOXTxSJMX2OLRZ5Ww3PKY2W34CYqelwfK0Uoc9CW+BLg==",
+  "dgSpecHash": "3bppMnSxH2DThtBb9Ib4KBr83emHI4nFuo1t2nJlpAb2A7t2d0DP378XvB2htqfoWEUhNpFNZd6efZFn+qdxEg==",
   "success": true,
   "projectFilePath": "C:\\_workspaces\\_dieselgate_scandal_ws\\server\\server.csproj",
   "expectedPackageFiles": [
+    "C:\\Users\\kevin\\.nuget\\packages\\bogus\\34.0.2\\bogus.34.0.2.nupkg.sha512",
     "C:\\Users\\kevin\\.nuget\\packages\\core.arango\\3.11.1\\core.arango.3.11.1.nupkg.sha512",
     "C:\\Users\\kevin\\.nuget\\packages\\microsoft.aspnetcore.authentication\\2.2.0\\microsoft.aspnetcore.authentication.2.2.0.nupkg.sha512",
     "C:\\Users\\kevin\\.nuget\\packages\\microsoft.aspnetcore.authentication.abstractions\\2.2.0\\microsoft.aspnetcore.authentication.abstractions.2.2.0.nupkg.sha512",

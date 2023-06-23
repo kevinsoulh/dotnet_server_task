@@ -42,3 +42,4 @@ C:\_workspaces\_dieselgate_scandal_ws\server\bin\Debug\net7.0\Microsoft.AspNetCo
 C:\_workspaces\_dieselgate_scandal_ws\server\bin\Debug\net7.0\Microsoft.IdentityModel.Protocols.dll
 C:\_workspaces\_dieselgate_scandal_ws\server\bin\Debug\net7.0\Microsoft.IdentityModel.Protocols.OpenIdConnect.dll
 C:\_workspaces\_dieselgate_scandal_ws\server\bin\Debug\net7.0\System.Security.Permissions.dll
+C:\_workspaces\_dieselgate_scandal_ws\server\bin\Debug\net7.0\Bogus.dll

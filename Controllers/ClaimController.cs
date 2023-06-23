@@ -1,5 +1,6 @@
 ﻿using System.Security.Claims;
 using System.Web;
+using Bogus;
 using Core.Arango;
 using Core.Arango.Linq;
 using Microsoft.AspNetCore.Mvc;
@@ -44,7 +45,7 @@ public class ClaimController : ControllerBase
         {
             if (request is { VehicleVin: null, Make: null, Model: null, Year: null, Mileage: null, RegistrationNumber: null, Description: null, DateOfDiscovery: null })
             {
-                return BadRequest("Please provide all requested information");
+                return BadRequest("Please provide all required information");
             }
             
             await _arangoContext.Document.CreateAsync("_system", "Claims", new
@@ -58,7 +59,8 @@ public class ClaimController : ControllerBase
                 Mileage = request.Mileage,
                 RegistrationNumber = request.RegistrationNumber,
                 Description = request.Description,
-                DateOfDiscovery = request.DateOfDiscovery
+                DateOfDiscovery = request.DateOfDiscovery,
+                Status = request.Status
             });
 
             return Ok(new {message = "Claim registered successfully"});
@@ -70,18 +72,11 @@ public class ClaimController : ControllerBase
     }
 
     [Authorize]
-    [HttpPut("update-claim/{claimId}")]
-    public async Task<IActionResult> Update([FromBody] ClaimModel claim, [FromRoute] string claimId)
+    [HttpPut("update-claim")]
+    public async Task<IActionResult> Update([FromBody] ClaimModel claim)
     {
         try
         {
-            var decodedClaimId = HttpUtility.UrlDecode(claimId);
-        
-            if (decodedClaimId != claim.Id)
-            {
-                return BadRequest("Id can't be changed");
-            }
-            
             await _arangoContext.Document.UpdateAsync("_system", "Claims", claim);
             
             return Ok(new {message = "Claim updated successfully"});
@@ -108,5 +103,54 @@ public class ClaimController : ControllerBase
         {
             return BadRequest("There was an error deleting your claim: " + e);
         }
+    }
+
+    [Authorize]
+    [HttpPost("generate-claims")]
+    public async Task<IActionResult> GenerateClaims()
+    {
+        try
+        {
+            var faker = new Faker<ClaimModel>()
+                .RuleFor(c => c.VehicleVin, f => f.Vehicle.Vin())
+                .RuleFor(c => c.Make, f => f.Vehicle.Manufacturer())
+                .RuleFor(c => c.Model, f => f.Vehicle.Model())
+                .RuleFor(c => c.Year, f => new Random().Next(1950, DateTime.Now.Year + 1))
+                .RuleFor(c => c.Mileage, f => f.Random.Number(10000, 100000))
+                .RuleFor(c => c.RegistrationNumber, f => GenerateRandomRegistrationNumber())
+                .RuleFor(c => c.Description, f => f.Lorem.Sentence())
+                .RuleFor(c => c.DateOfDiscovery, f => f.Date.Past().ToString("yyyy-MM-dd"))
+                .RuleFor(c => c.Status, f => f.Random.Bool());
+
+            var userId = User.Claims.First(x => x.Type == ClaimTypes.NameIdentifier).Value;
+
+            var claims = faker.Generate(10);
+
+            foreach (var claim in claims)
+            {
+                claim.Key = Guid.NewGuid();
+                claim.UserId = userId;
+                await _arangoContext.Document.CreateAsync("_system", "Claims", claim);
+            }
+
+            return Ok(new { message = "Claims generated successfully" });
+        }
+        catch (Exception e)
+        {
+            return BadRequest("There was an error generating claims: " + e);
+        }
+    }
+
+    private string GenerateRandomRegistrationNumber()
+    {
+        const string letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        var random = new Random();
+
+        var letterPart = new string(Enumerable.Repeat(letters, 5)
+            .Select(s => s[random.Next(s.Length)]).ToArray()).ToUpper();
+
+        var numberPart = random.Next(100, 1000).ToString();
+
+        return letterPart + numberPart;
     }
 }

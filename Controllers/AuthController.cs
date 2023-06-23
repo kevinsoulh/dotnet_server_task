@@ -54,7 +54,7 @@ public class AuthController : ControllerBase
         var claims = new List<Claim>
         {
             new Claim(type: ClaimTypes.NameIdentifier, value: user?.Id ?? string.Empty),
-            new Claim(type: ClaimTypes.Hash, value: user?.Key ?? string.Empty),
+            new Claim(type: ClaimTypes.Hash, value: (user?.Key).ToString() ?? string.Empty),
             new Claim(type: ClaimTypes.Name, value: user?.Name ?? string.Empty),
             new Claim(type: ClaimTypes.Email, value: user?.Email ?? string.Empty),
         };
@@ -76,10 +76,12 @@ public class AuthController : ControllerBase
     
     
     [Authorize]
-    [HttpPost("logout")]
-    public async Task SignOutAsync()
+    [HttpGet("logout")]
+    public async Task<IActionResult> SignOutAsync()
     {
         await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+
+        return Ok(new {message = "Logged out successfully"});
     }
 
     [Authorize]
